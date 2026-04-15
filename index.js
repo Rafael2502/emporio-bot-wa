@@ -2,12 +2,13 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeys
 import Anthropic from '@anthropic-ai/sdk';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
+import fs from 'fs';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const NATAN_NUMBER = '5531971805313@s.whatsapp.net';
-
-const humanMode = {};
-const HUMAN_MODE_DURATION = 1800000;
+const HUMAN_MODE_FILE = 'human_mode.json';
+const HUMAN_MODE_DURATION = 1800000; // 30 minutos
+const MAX_HISTORY = 20; // máximo de mensagens por conversa (10 pares)
 
 const SYSTEM_PROMPT = `Você é o atendente virtual do Empório Fonte Grande, um açougue e restaurante em Contagem, MG.
 Responda sempre de forma simpática, rápida e objetiva. Use linguagem informal e amigável. Use emojis com moderação.
@@ -61,6 +62,48 @@ Kit Air Fryer - R$ 124,90
 5. Se o cliente digitar "humano", "atendente" ou "natan": encerre com [CHAMAR_NATAN]
 6. Nunca invente preços ou informações.`;
 
+// --- Histórico de conversa ---
+const conversationHistory = {};
+
+function addToHistory(number, role, content) {
+  if (!conversationHistory[number]) conversationHistory[number] = [];
+  conversationHistory[number].push({ role, content });
+  if (conversationHistory[number].length > MAX_HISTORY) {
+    conversationHistory[number] = conversationHistory[number].slice(-MAX_HISTORY);
+  }
+}
+
+function clearHistory(number) {
+  delete conversationHistory[number];
+}
+
+// --- Human mode com persistência ---
+function loadHumanMode() {
+  try {
+    if (fs.existsSync(HUMAN_MODE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(HUMAN_MODE_FILE, 'utf8'));
+      const now = Date.now();
+      for (const key of Object.keys(data)) {
+        if (now - data[key] >= HUMAN_MODE_DURATION) delete data[key];
+      }
+      return data;
+    }
+  } catch (err) {
+    console.error('Erro ao carregar human_mode.json:', err);
+  }
+  return {};
+}
+
+function saveHumanMode() {
+  try {
+    fs.writeFileSync(HUMAN_MODE_FILE, JSON.stringify(humanMode));
+  } catch (err) {
+    console.error('Erro ao salvar human_mode.json:', err);
+  }
+}
+
+const humanMode = loadHumanMode();
+
 function isHumanTrigger(text) {
   const normalized = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return ['humano', 'atendente', 'natan'].some(t => normalized.includes(t));
@@ -70,18 +113,31 @@ function isInHumanMode(number) {
   if (humanMode[number]) {
     if (Date.now() - humanMode[number] < HUMAN_MODE_DURATION) return true;
     delete humanMode[number];
+    saveHumanMode();
   }
   return false;
 }
 
-async function getAIResponse(message) {
+function activateHumanMode(number) {
+  humanMode[number] = Date.now();
+  saveHumanMode();
+  clearHistory(number);
+}
+
+// --- IA com histórico ---
+async function getAIResponse(number, message) {
+  addToHistory(number, 'user', message);
+
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 800,
     system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: message }]
+    messages: conversationHistory[number]
   });
-  return response.content[0].text;
+
+  const aiText = response.content[0].text;
+  addToHistory(number, 'assistant', aiText);
+  return aiText;
 }
 
 async function startBot() {
@@ -102,7 +158,12 @@ async function startBot() {
     }
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) startBot();
+      if (shouldReconnect) {
+        console.log('🔄 Reconectando em 3 segundos...');
+        setTimeout(() => startBot(), 3000);
+      } else {
+        console.log('❌ Sessão encerrada. Escaneie o QR Code novamente.');
+      }
     }
     if (connection === 'open') {
       console.log('✅ WhatsApp conectado!');
@@ -121,34 +182,48 @@ async function startBot() {
 
     const pushName = msg.pushName || '';
     const firstName = pushName.split(' ')[0];
+    const phoneNumber = from.replace('@s.whatsapp.net', '');
 
-    if (isHumanTrigger(text)) {
-      humanMode[from] = Date.now();
-      await sock.sendMessage(from, { text: 'Claro! Vou chamar o Natan pra te atender agora 😊 Um momento!' });
-      return;
-    }
-
-    if (isInHumanMode(from)) return;
-
-    const messageWithName = firstName ? `[Cliente: ${firstName}]\n${text}` : text;
-    const aiResponse = await getAIResponse(messageWithName);
-
-    if (aiResponse.includes('[CHAMAR_NATAN]')) {
-      const clean = aiResponse.replace('[CHAMAR_NATAN]', '').trim();
-      await sock.sendMessage(from, { text: clean });
-      humanMode[from] = Date.now();
-    } else if (aiResponse.includes('[RESERVA:')) {
-      const match = aiResponse.match(/\[RESERVA:([^\]]+)\]/);
-      if (match) {
-        const [nome, horario, pessoas] = match[1].split('|');
-        const clean = aiResponse.slice(0, aiResponse.indexOf('[RESERVA:')).trim();
-        await sock.sendMessage(from, { text: clean });
+    try {
+      if (isHumanTrigger(text)) {
+        activateHumanMode(from);
+        await sock.sendMessage(from, { text: 'Claro! Vou chamar o Natan pra te atender agora 😊 Um momento!' });
         await sock.sendMessage(NATAN_NUMBER, {
-          text: `🍽️ *Nova reserva!*\n\nNome: ${nome}\nHorário: ${horario}\nPessoas: ${pessoas}`
+          text: `🔔 *Cliente solicitou atendimento humano!*\n\nCliente: ${pushName || phoneNumber}\nNúmero: ${phoneNumber}`
         });
+        return;
       }
-    } else {
-      await sock.sendMessage(from, { text: aiResponse });
+
+      if (isInHumanMode(from)) return;
+
+      const messageWithName = firstName ? `[Cliente: ${firstName}]\n${text}` : text;
+      const aiResponse = await getAIResponse(from, messageWithName);
+
+      if (aiResponse.includes('[CHAMAR_NATAN]')) {
+        const clean = aiResponse.replace('[CHAMAR_NATAN]', '').trim();
+        if (clean) await sock.sendMessage(from, { text: clean });
+        activateHumanMode(from);
+        await sock.sendMessage(NATAN_NUMBER, {
+          text: `🔔 *Atendimento necessário!*\n\nCliente: ${pushName || phoneNumber}\nNúmero: ${phoneNumber}\nÚltima mensagem: ${text}`
+        });
+      } else if (aiResponse.includes('[RESERVA:')) {
+        const match = aiResponse.match(/\[RESERVA:([^|]+)\|([^|]+)\|([^\]]+)\]/);
+        if (match) {
+          const [, nome, horario, pessoas] = match;
+          const clean = aiResponse.slice(0, aiResponse.indexOf('[RESERVA:')).trim();
+          if (clean) await sock.sendMessage(from, { text: clean });
+          await sock.sendMessage(NATAN_NUMBER, {
+            text: `🍽️ *Nova reserva!*\n\nNome: ${nome.trim()}\nHorário: ${horario.trim()}\nPessoas: ${pessoas.trim()}\nContato: ${phoneNumber}`
+          });
+        }
+      } else {
+        await sock.sendMessage(from, { text: aiResponse });
+      }
+    } catch (err) {
+      console.error(`Erro ao processar mensagem de ${phoneNumber}:`, err);
+      await sock.sendMessage(from, {
+        text: 'Desculpe, tive um problema técnico. Tente novamente em instantes!'
+      }).catch(() => {});
     }
   });
 }
