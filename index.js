@@ -1,6 +1,6 @@
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import Anthropic from '@anthropic-ai/sdk';
-import qrcode from 'qrcode-terminal';
+import qrcode from 'qrcode';
 import pino from 'pino';
 import fs from 'fs';
 
@@ -153,8 +153,10 @@ async function startBot() {
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log('📱 Escaneie o QR Code abaixo com o WhatsApp do Empório:');
-      qrcode.generate(qr, { small: true });
+      qrcode.toFile('qrcode.png', qr, err => {
+        if (err) console.error('Erro ao salvar qrcode.png:', err);
+        else console.log('📱 QR Code salvo em qrcode.png — abra o arquivo e escaneie com o WhatsApp.');
+      });
     }
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
