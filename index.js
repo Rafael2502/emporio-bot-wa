@@ -152,13 +152,16 @@ async function startBot() {
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
+      console.log('QR recebido, salvando qrcode.png...');
       qrcode.toFile('qrcode.png', qr, err => {
         if (err) console.error('Erro ao salvar qrcode.png:', err);
         else console.log('📱 QR Code salvo em qrcode.png — abra o arquivo e escaneie com o WhatsApp.');
       });
     }
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      console.log('Conexão fechada. Código:', statusCode, '| Erro:', lastDisconnect?.error?.message);
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {
         console.log('🔄 Reconectando em 3 segundos...');
         setTimeout(() => startBot(), 3000);
