@@ -7,7 +7,7 @@ import fs from 'fs';
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const NATAN_NUMBER = '5531971805313@s.whatsapp.net';
 const HUMAN_MODE_FILE = 'human_mode.json';
-const HUMAN_MODE_DURATION = 1800000; // 30 minutos
+const HUMAN_MODE_DURATION = 10800000; // 3 horas
 const MAX_HISTORY = 20; // máximo de mensagens por conversa (10 pares)
 
 const SYSTEM_PROMPT = `Você é o atendente virtual do Empório Fonte Grande, um açougue e restaurante em Contagem, MG.
