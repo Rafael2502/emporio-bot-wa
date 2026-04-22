@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from 'baileys';
 import Anthropic from '@anthropic-ai/sdk';
 import qrcode from 'qrcode';
 import pino from 'pino';
