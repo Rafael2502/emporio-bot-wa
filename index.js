@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from 'baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from 'baileys';
 import Anthropic from '@anthropic-ai/sdk';
 import qrcode from 'qrcode';
 import pino from 'pino';
@@ -142,8 +142,10 @@ async function getAIResponse(number, message) {
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
+    version,
     auth: state,
     logger: pino({ level: 'silent' })
   });
